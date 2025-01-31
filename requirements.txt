@@ -1,0 +1,2 @@
+jupyter==1.1.1
+starknet-py==0.25.0
