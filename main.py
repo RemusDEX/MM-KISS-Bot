@@ -15,7 +15,11 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
-from cfg import REMUS_ADDRESS, STARKNET_RPC, WALLET_ADDRESS, PRIVATE_KEY, PUBLIC_KEY, SOURCE_DATA, NETWORK, MARKET_MAKER_CFG, MAX_FEE
+from cfg import REMUS_ADDRESS, STARKNET_RPC, WALLET_ADDRESS, SOURCE_DATA, NETWORK, MARKET_MAKER_CFG, MAX_FEE, DECIMALS
+
+
+
+PATH_TO_KEYSTORE = "keystore.json"
 
 
 
@@ -35,19 +39,22 @@ def parse_arguments():
         choices = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help = "Set the logging level"
     )
+    parser.add_argument(
+        "--account-password",
+        type = str,
+        default = "",
+        help = "Set the account password"
+    )
     return parser.parse_args()
 
 
-def get_account() -> Account:
+def get_account(account_password: str) -> Account:
     """Get a market makers account."""
     client = FullNodeClient(node_url = STARKNET_RPC)
     account = Account(
         client = client,
         address = WALLET_ADDRESS,
-        key_pair = KeyPair(
-            private_key = PRIVATE_KEY,
-            public_key = PUBLIC_KEY
-        ),
+        key_pair = KeyPair.from_keystore(PATH_TO_KEYSTORE, account_password),
         chain = StarknetChainId[NETWORK]
     )
     logging.info("Succesfully loaded account.")
@@ -118,20 +125,27 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
     """
     to_be_canceled = []
     to_be_created = []
+
+    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
     
     for side, side_name in [(asks, 'ask'), (bids, 'bid')]:
         to_be_canceled_side = []
         to_be_created_side = []
     
         for order in side:
-            if order['amount_remaining'] / 10**18 * order['price'] / 10**18 < market_maker_cfg['minimal_remaining_quote_size']:
+            if order['amount_remaining'] / 10**base_decimals * order['price'] / 10**base_decimals < market_maker_cfg['minimal_remaining_quote_size']:
+                logging.info(f"Canceling order because of insufficient amount. amount: {order['amount_remaining']}")
+                logging.debug(f"Canceling order because of insufficient amount. order: {order}")
                 to_be_canceled_side.append(order)
                 continue
             if (
-                (1 - market_maker_cfg['max_error_relative_distance_from_FP'] > order['price'] / 10**18 / fair_price)
+                (1 - market_maker_cfg['max_error_relative_distance_from_FP'] > order['price'] / 10**base_decimals / fair_price)
                 or
-                (order['price'] / 10**18 / fair_price > 1 + market_maker_cfg['max_error_relative_distance_from_FP'])
+                (order['price'] / 10**base_decimals / fair_price > 1 + market_maker_cfg['max_error_relative_distance_from_FP'])
             ):
+                logging.info(f"Canceling order because of incorrect price. fair_price: {fair_price}, order price: {order['price'] / 10**base_decimals}")
+                logging.debug(f"Canceling order because of incorrect price. order: {order}")
                 to_be_canceled_side.append(order)
         # If there is too many orders in the market that are not being canceled, cancel them at random. This can happen due to transactions failures.
         if len(side) - len(to_be_canceled_side) > 1:
@@ -145,15 +159,15 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
         # Create order if there is no order
         if len(to_be_canceled_side) == len(side):
             if side_name == 'ask':
-                optimal_price = int(fair_price * (1 + market_maker_cfg['target_relative_distance_from_FP']) * 10**18)
+                optimal_price = int(fair_price * (1 + market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals)
                 optimal_price = optimal_price // market_cfg[1]['tick_size']
                 optimal_price = optimal_price * market_cfg[1]['tick_size'] + market_cfg[1]['tick_size']
             else:
-                optimal_price = int(fair_price * (1 - market_maker_cfg['target_relative_distance_from_FP']) * 10**18)
+                optimal_price = int(fair_price * (1 - market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals)
                 optimal_price = optimal_price // market_cfg[1]['tick_size']
                 optimal_price = optimal_price * market_cfg[1]['tick_size']
     
-            optimal_amount = market_maker_cfg['order_dollar_size'] / (optimal_price / 10**18) 
+            optimal_amount = market_maker_cfg['order_dollar_size'] / (optimal_price / 10**base_decimals) 
             optimal_amount = optimal_amount // market_cfg[1]['lot_size']
             optimal_amount = optimal_amount * market_cfg[1]['lot_size']
     
@@ -163,11 +177,16 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
                 'price': optimal_price
             }
             to_be_created.append(order)
-    logging.info(f"Optimal quotes calculated: to_be_canceled: {to_be_canceled}, to_be_created: {to_be_created}")
+    logging.info(f"Optimal quotes calculated: to_be_canceled: {len(to_be_canceled)}, to_be_created: {len(to_be_created)}")
+    logging.debug(f"Optimal quotes calculated: to_be_canceled: {to_be_canceled}, to_be_created: {to_be_created}")
     return to_be_canceled, to_be_created
 
 
 async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract):
+    
+    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
+    
     nonce = await account.get_nonce()
     for i, order in enumerate(to_be_canceled):
         (await remus_contract.functions['delete_maker_order'].invoke_v1(
@@ -187,9 +206,9 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
             order_side = 'Bid'
             token_contract = quote_token_contract
     
-        approve_amount = order['amount'] if order_side == 'Bid' else order['amount'] * order['price'] / 10**18
+        approve_amount = order['amount'] if order_side == 'Bid' else order['amount'] * order['price'] / 10**base_decimals
         if order_side == 'Bid':
-            approve_amount = 1000*10**18
+            approve_amount = 1000 * 10**base_decimals
         await (await token_contract.functions['approve'].invoke_v1(
             spender=int(REMUS_ADDRESS, 16),
             amount = int(approve_amount),
@@ -221,7 +240,7 @@ async def async_main():
 
     logging.info("Starting Simple Stupid Market Maker")
 
-    account = get_account()
+    account = get_account(args.account_password)
     remus_contract = await Contract.from_address(address = REMUS_ADDRESS, provider = account)
     all_remus_cfgs = await remus_contract.functions['get_all_market_configs'].call()
     
@@ -245,7 +264,7 @@ async def async_main():
 
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
-                logging.info(f'My remaining orders queried queried: {fair_price}.')
+                logging.debug(f'My remaining orders queried: {bids}, {asks}.')
 
                 # 4) Get position (balance of + open orders)
                 base_token_contract = await Contract.from_address(address = market_cfg[1]['base_token'], provider = account)
