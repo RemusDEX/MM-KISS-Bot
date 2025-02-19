@@ -182,8 +182,6 @@ async def update_delete_quotes(
     base_token_contract,
     quote_token_contract
 ) -> int:
-    # base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
-    # quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     nonce = await account.get_nonce()
     number_of_txs_used = 0
     for i, order in enumerate(to_be_canceled):
