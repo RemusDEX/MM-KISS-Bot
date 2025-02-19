@@ -173,11 +173,17 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
     return to_be_canceled, to_be_created
 
 
-async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract):
-    
-    base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
-    quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
-    
+async def update_delete_quotes(
+    account: Account,
+    market_cfg,
+    remus_contract,
+    to_be_canceled,
+    to_be_created,
+    base_token_contract,
+    quote_token_contract
+) -> int:
+    # base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
+    # quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     nonce = await account.get_nonce()
     for i, order in enumerate(to_be_canceled):
         await (await remus_contract.functions['delete_maker_order'].invoke_v1(
@@ -186,6 +192,21 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
             nonce = nonce + i
         )).wait_for_acceptance()
         logging.info(f"Canceling: {order['maker_order_id']}")
+
+    return nonce + i
+
+async def update_best_quotes(
+    account: Account,
+    market_cfg,
+    remus_contract,
+    to_be_canceled,
+    to_be_created,
+    base_token_contract,
+    quote_token_contract,
+    nonce
+) -> int:
+    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
     
     for i, order in enumerate(to_be_created):
         if order['order_side'] == 'ask':
@@ -204,7 +225,7 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
             spender=int(env_config.remus_address, 16),
             amount = int(approve_amount),
             max_fee=MAX_FEE,
-            nonce = nonce + len(to_be_canceled) + i * 2
+            nonce = nonce + i * 2
         )).wait_for_acceptance()
         logging.info(f"Approving: {order['amount']}")
 
@@ -218,7 +239,7 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
             order_type = ('Basic', None),
             time_limit = ('GTC', None),
             max_fee=MAX_FEE,
-            nonce = nonce + len(to_be_canceled) + i * 2 + 1
+            nonce = nonce + i * 2 + 1
         )).wait_for_acceptance()
         logging.info(f"Submitting order: q: {order['amount']}, p: {order['price']}, s: {order_side}")
     logging.info('Done with order changes')
@@ -290,8 +311,13 @@ async def async_main():
                 to_be_canceled, to_be_created = get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price)
 
                 # 6) update quotes
-                await update_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract)
-                
+                nonce = await update_delete_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract)
+                assert nonce is not None
+                assert nonce != 0
+                logging.info(f'$$$$$$$$$$$$$$$$$$$$$$$ {nonce} $$$$$$$$$$$$$$$$$$$$$$$')
+                await update_best_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract, nonce)
+                await update_
+
                 logging.info("Application running successfully.")
             except Exception as e:
                 logging.error("An error occurred: %s", str(e), exc_info=True)
@@ -333,3 +359,4 @@ async def async_main():
 
 if __name__ == "__main__":
     asyncio.run(async_main())
+
