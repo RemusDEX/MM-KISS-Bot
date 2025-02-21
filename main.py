@@ -113,6 +113,11 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
     Optimal quote is in market_maker_cfg['target_relative_distance_from_FP'] distance from the FP, where FP is binance price.
     The order is never perfect and market_maker_cfg['max_error_relative_distance_from_FP'] from optimal quote price level is allowed, meaning
     that an old quote is canceled and new one created if the distance is outside of what is ok.
+
+    TODO: following approach to creating and handling deep orders is quite inefficient in terms of gas
+    and potentially losing position in the queue on a given price level. It is quite efficient in terms
+    of readability and managing and monitoring the source code and running app. This is quite important
+    in the early days of this bot.
     """
     to_be_canceled = []
     to_be_created = []
@@ -125,29 +130,34 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
         to_be_created_side = []
     
         for order in side:
+            # If the remaining order size is too small requote (cancel order)
             if order['amount_remaining'] / 10**base_decimals * order['price'] / 10**base_decimals < market_maker_cfg['minimal_remaining_quote_size']:
                 logging.info(f"Canceling order because of insufficient amount. amount: {order['amount_remaining']}")
                 logging.debug(f"Canceling order because of insufficient amount. order: {order}")
                 to_be_canceled_side.append(order)
                 continue
+            # If an order is outside of following interval
+            #     (1-m)*fp > p > (1+m)*fp
+            # cancel it. Where m = market_maker_cfg['max_error_relative_distance_from_FP'], fp = fair_price, p = order['price']
             if (
                 (1 - market_maker_cfg['max_error_relative_distance_from_FP'] > order['price'] / 10**base_decimals / fair_price)
                 or
                 (order['price'] / 10**base_decimals / fair_price > 1 + market_maker_cfg['max_error_relative_distance_from_FP'])
             ):
-                logging.info(f"Canceling order because of incorrect price. fair_price: {fair_price}, order price: {order['price'] / 10**base_decimals}")
-                logging.debug(f"Canceling order because of incorrect price. order: {order}")
+                logging.info(f"Canceling order because too close to FP. fair_price: {fair_price}, order price: {order['price'] / 10**base_decimals}")
+                logging.debug(f"Canceling order because too close to FP. order: {order}")
                 to_be_canceled_side.append(order)
-        # If there is too many orders in the market that are not being canceled, cancel them at random. This can happen due to transactions failures.
-        if len(side) - len(to_be_canceled_side) > 1:
+        # If there is too many orders in the market that are not being canceled, cancel those with the most distant price from FP
+        # to a point that only the "allowed" number of orders is being kept.
+        if len(side) - len(to_be_canceled_side) > market_maker_cfg['max_number_of_orders_per_side']:
             remainers = []
-            for order in side:
-                if order not in to_be_canceled_side:
-                    remainers.append(order)
-            to_be_canceled_side.extend(remainers[1:])
+            # assumes "side" (e.g. asks and bids) are ordered from the best to the deepest
+            to_be_canceled_side.extend(
+                [order for order in side if order not in to_be_canceled_side][market_maker_cfg['max_number_of_orders_per_side']:]
+            )
         to_be_canceled.extend(to_be_canceled_side)
     
-        # Create order if there is no order
+        # Create best order if there is no best order
         if len(to_be_canceled_side) == len(side):
             if side_name == 'ask':
                 optimal_price = int(fair_price * (1 + market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals)
@@ -292,6 +302,8 @@ async def async_main():
 
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
+                bids = sorted(bids, key = lambda x: -x.order_price)
+                asks = sorted(asks, key = lambda x: -x.order_price)
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
                 pretty_print_orders(asks, bids)
 
