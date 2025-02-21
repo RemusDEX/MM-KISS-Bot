@@ -15,7 +15,7 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
-from cfg import REMUS_ADDRESS, STARKNET_RPC, WALLET_ADDRESS, SOURCE_DATA, NETWORK, MARKET_MAKER_CFG, MAX_FEE, DECIMALS
+from config import token_config, env_config, market_config, WALLET_ADDRESS, MAX_FEE, SOURCE_DATA
 
 
 
@@ -50,12 +50,12 @@ def parse_arguments():
 
 def get_account(account_password: str) -> Account:
     """Get a market makers account."""
-    client = FullNodeClient(node_url = STARKNET_RPC)
+    client = FullNodeClient(node_url = env_config.starknet_rpc)
     account = Account(
         client = client,
         address = WALLET_ADDRESS,
         key_pair = KeyPair.from_keystore(PATH_TO_KEYSTORE, account_password),
-        chain = StarknetChainId[NETWORK]
+        chain = StarknetChainId[env_config.network]
     )
     logging.info("Succesfully loaded account.")
     return account
@@ -64,7 +64,7 @@ def get_account(account_password: str) -> Account:
 def get_market_cfg(all_remus_cfgs: Any, market_id: int) -> Tuple[Any, Any]:
     market_id = 1
     market_cfg = all_remus_cfgs[0][0]
-    market_maker_cfg = MARKET_MAKER_CFG[market_id]
+    market_maker_cfg = market_config.market_maker_cfg[market_id]
     assert market_maker_cfg
     market_cfg = [x for x in all_remus_cfgs[0] if x[0] == market_id][0]
     assert market_cfg
@@ -126,8 +126,8 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
     to_be_canceled = []
     to_be_created = []
 
-    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
-    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
+    base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     
     for side, side_name in [(asks, 'ask'), (bids, 'bid')]:
         to_be_canceled_side = []
@@ -184,8 +184,8 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
 
 async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract):
     
-    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
-    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
+    base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     
     nonce = await account.get_nonce()
     for i, order in enumerate(to_be_canceled):
@@ -210,7 +210,7 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
         if order_side == 'Bid':
             approve_amount = 1000 * 10**base_decimals
         await (await token_contract.functions['approve'].invoke_v1(
-            spender=int(REMUS_ADDRESS, 16),
+            spender=int(env_config.remus_address, 16),
             amount = int(approve_amount),
             max_fee=MAX_FEE,
             nonce = nonce + len(to_be_canceled) + i * 2
@@ -241,12 +241,12 @@ async def async_main():
     logging.info("Starting Simple Stupid Market Maker")
 
     account = get_account(args.account_password)
-    remus_contract = await Contract.from_address(address = REMUS_ADDRESS, provider = account)
+    remus_contract = await Contract.from_address(address = env_config.remus_address, provider = account)
     all_remus_cfgs = await remus_contract.functions['get_all_market_configs'].call()
     
     while True:
         await asyncio.sleep(1)  # Example async operation
-        for market_id in [x[0] for x in all_remus_cfgs[0] if x[0] in MARKET_MAKER_CFG]:
+        for market_id in [x[0] for x in all_remus_cfgs[0] if x[0] in market_config.market_maker_cfg]:
             try:
                 market_cfg, market_maker_cfg = get_market_cfg(all_remus_cfgs, market_id)
 
