@@ -16,6 +16,7 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.net.client_models import ResourceBounds
 
 from cfg import REMUS_ADDRESS, STARKNET_RPC, WALLET_ADDRESS, SOURCE_DATA, NETWORK, MARKET_MAKER_CFG, MAX_FEE, DECIMALS
+from remus import RemusManager
 
 
 
@@ -241,8 +242,8 @@ async def async_main():
     logging.info("Starting Simple Stupid Market Maker")
 
     account = get_account(args.account_password)
-    remus_contract = await Contract.from_address(address = REMUS_ADDRESS, provider = account)
-    all_remus_cfgs = await remus_contract.functions['get_all_market_configs'].call()
+    remus_contract = await RemusManager.init(address=REMUS_ADDRESS, provider=account)
+    all_remus_cfgs = await RemusManager.get_config(contract = remus_contract)
     
     while True:
         await asyncio.sleep(1)  # Example async operation
@@ -267,8 +268,8 @@ async def async_main():
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
 
                 # 4) Get position (balance of + open orders)
-                base_token_contract = await Contract.from_address(address = market_cfg[1]['base_token'], provider = account)
-                quote_token_contract = await Contract.from_address(address = market_cfg[1]['quote_token'], provider = account)
+                base_token_contract = await RemusManager.get_base_contract(market_cfg= market_cfg, provider = account)
+                quote_token_contract = await RemusManager.get_quote_contract(market_cfg= market_cfg, provider = account)
                 total_possible_position_base, total_possible_position_quote = await get_position(
                     market_cfg, account, asks, bids, base_token_contract, quote_token_contract
                 )
