@@ -36,12 +36,6 @@ def parse_arguments():
         choices = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help = "Set the logging level"
     )
-    # parser.add_argument(
-    #     "--account-password",
-    #     type = str,
-    #     default = "",
-    #     help = "Set the account password"
-    # )
     return parser.parse_args()
 
 
