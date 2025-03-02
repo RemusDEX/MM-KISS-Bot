@@ -2,15 +2,15 @@ from starknet_py.contract import Contract
 import asyncio
 
 class RemusManager:
-    def __init__(self, account, env_config):
+    def __init__(self, account, env_config, remus_contract, all_remus_cfgs):
         """
         Initialize the RemusManager with the given account and environment configuration.
         This method should be called only once.
         """
         self.account = account
         self.env_config = env_config
-        self.remus_contract = None
-        self.all_remus_cfgs = None
+        self.remus_contract = remus_contract
+        self.all_remus_cfgs = all_remus_cfgs
 
     async def init(self):
         """
