@@ -224,6 +224,15 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
     logging.info('Done with order changes')
 
 
+def pretty_print_orders(asks, bids):
+    logging.info('Pretty printed current orders.')
+    for ask in sorted(asks, key=lambda x: x['price']):
+        logging.info('\t\t%s; %s', ask['price'] / 10**18, ask['amount_remaining'] / 10**18)
+    logging.info('XXX')
+    for bid in sorted(bids, key=lambda x: x['price']):
+        logging.info('\t\t%s; %s', bid['price'] / 10**18, bid['amount_remaining'] / 10**18)
+
+
 async def async_main():
     """Main async execution function."""
     args = parse_arguments()
@@ -255,7 +264,7 @@ async def async_main():
                 # 2) Get prices
                 r = requests.get(SOURCE_DATA[market_id])
                 fair_price = float(sorted(r.json(), key = lambda x: x['T'])[-1]['p'])
-                logging.info('Fair price queried: {%s}.', fair_price)
+                logging.info('Fair price queried: %s.', fair_price)
 
                 # 3) Get orders
                 my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
@@ -263,6 +272,7 @@ async def async_main():
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
+                pretty_print_orders(asks, bids)
 
                 # 4) Get position (balance of + open orders)
                 # TODO: the remus_manager is messed up, it has to be debugged and fixed
