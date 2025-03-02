@@ -16,7 +16,7 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
-from config import token_config, env_config, market_config, MAX_FEE, SOURCE_DATA
+from config import token_config, env_config, market_config, MAX_FEE, SOURCE_DATA, SLEEPER_SECONDS_BETWEEN_REQUOTING
 
 
 
