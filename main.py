@@ -39,7 +39,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_account(account_password: str) -> Account:
+def get_account() -> Account:
     """Get a market makers account."""
     client = FullNodeClient(node_url = env_config.starknet_rpc)
     account = Account(
@@ -240,7 +240,7 @@ async def async_main():
 
     logging.info("Starting Simple Stupid Market Maker")
 
-    account = get_account(env_config.account_password)
+    account = get_account()
 
     # FIXME: This was half done, yet merged to master. Keeping it for now for the sake of making
     # the code run (without having enough time to fix things).
@@ -299,7 +299,7 @@ async def async_main():
                 await asyncio.sleep(5)
                 # Get all existing orders
                 logging.error("Starting to cancel all - get_all_user_orders.")
-                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=WALLET_ADDRESS)
+                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
                 logging.error("Starting to cancel all - my_orders:{%s}.", my_orders)
 
                 # Cancel all existing orders
@@ -314,12 +314,12 @@ async def async_main():
                 # Waiting a little and checking existing orders
                 logging.error("Ending cancel all - wait before exit.")
                 await asyncio.sleep(15)
-                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=WALLET_ADDRESS)
+                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
                 logging.error("Ending cancel all - remaining my_orders:{%s}.", my_orders)
 
                 #Claiming unclaimed
                 logging.error("Ending cancel all - claiming unclaimed.")
-                for market_id in [x[0] for x in all_remus_cfgs[0] if x[0] in MARKET_MAKER_CFG]:
+                for market_id in market_config.market_maker_cfg.keys():
                     try:
                         market_cfg, market_maker_cfg = get_market_cfg(all_remus_cfgs, market_id)
                         await claim_tokens(market_cfg, remus_contract)
