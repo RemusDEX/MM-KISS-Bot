@@ -16,11 +16,7 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
-from config import token_config, env_config, market_config, WALLET_ADDRESS, MAX_FEE, SOURCE_DATA
-
-remus_manager = RemusManager()
-
-PATH_TO_KEYSTORE = "keystore.json"
+from config import token_config, env_config, market_config, MAX_FEE, SOURCE_DATA
 
 
 
@@ -40,12 +36,6 @@ def parse_arguments():
         choices = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help = "Set the logging level"
     )
-    parser.add_argument(
-        "--account-password",
-        type = str,
-        default = "",
-        help = "Set the account password"
-    )
     return parser.parse_args()
 
 
@@ -54,8 +44,8 @@ def get_account(account_password: str) -> Account:
     client = FullNodeClient(node_url = env_config.starknet_rpc)
     account = Account(
         client = client,
-        address = WALLET_ADDRESS,
-        key_pair = KeyPair.from_keystore(PATH_TO_KEYSTORE, account_password),
+        address = env_config.wallet_address,
+        key_pair = KeyPair.from_keystore(env_config.path_to_keystore, env_config.account_password),
         chain = StarknetChainId[env_config.network]
     )
     logging.info("Succesfully loaded account.")
@@ -83,7 +73,7 @@ async def claim_tokens(market_cfg, remus_contract) -> None:
     for token_address in [market_cfg[1]['base_token'], market_cfg[1]['quote_token']]:
         claimable = await remus_contract.functions['get_claimable'].call(
             token_address = token_address,
-            user_address = WALLET_ADDRESS
+            user_address = env_config.wallet_address
         )
         logging.info(f'Claimable amount is {claimable} for token {token_address}.')
         if claimable[0]:
@@ -102,11 +92,11 @@ async def get_position(market_cfg, account, asks, bids, base_token_contract, quo
     # base_token_contract - mETH
     # quote_token_contract - mUSDC
     """
-    balance_base = await base_token_contract.functions['balance_of'].call(account=WALLET_ADDRESS)
+    balance_base = await base_token_contract.functions['balance_of'].call(account=env_config.wallet_address)
     amount_remaining_base = sum(x['amount_remaining'] for x in asks)
     total_possible_position_base = balance_base[0] + amount_remaining_base
     #
-    balance_quote = await quote_token_contract.functions['balance_of'].call(account=WALLET_ADDRESS)
+    balance_quote = await quote_token_contract.functions['balance_of'].call(account=env_config.wallet_address)
     amount_remaining_quote = sum(x['amount_remaining'] for x in bids)
     total_possible_position_quote = balance_quote[0] + amount_remaining_quote
 
@@ -190,7 +180,7 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
     
     nonce = await account.get_nonce()
     for i, order in enumerate(to_be_canceled):
-        (await remus_contract.functions['delete_maker_order'].invoke_v1(
+        await (await remus_contract.functions['delete_maker_order'].invoke_v1(
             maker_order_id=order['maker_order_id'],
             max_fee=MAX_FEE,
             nonce = nonce + i
@@ -241,7 +231,17 @@ async def async_main():
 
     logging.info("Starting Simple Stupid Market Maker")
 
-    account = get_account(args.account_password)
+    account = get_account(env_config.account_password)
+
+
+    # FIXME: This was half done, yet merged to master. Keeping it for now for the sake of making
+    # the code run (without having enough time to fix things).
+    # TODO: the remus_manager is f*** up, not sure whether to remove and redo completely.
+    remus_contract = await Contract.from_address(address = env_config.remus_address, provider = account)
+
+    all_remus_cfgs = await remus_contract.functions['get_all_market_configs'].call()
+
+    # remus_manager = RemusManager(account, env_config, remus_contract, all_remus_cfgs)
     
     while True:
         await asyncio.sleep(1)  # Example async operation
@@ -259,15 +259,20 @@ async def async_main():
                 logging.info(f'Fair price queried: {fair_price}.')
 
                 # 3) Get orders
-                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=WALLET_ADDRESS)
+                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
 
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
 
                 # 4) Get position (balance of + open orders)
-                base_token_contract = remus_manager.get_base_contract()
-                quote_token_contract = remus_manager.get_quote_contract()
+                # TODO: the remus_manager is messed up, it has to be debugged and fixed
+                # base_token_contract = await remus_manager.get_base_contract()
+                # quote_token_contract = await remus_manager.get_quote_contract()
+
+                base_token_contract = await Contract.from_address(address = market_cfg[1]['base_token'], provider = account)
+                quote_token_contract = await Contract.from_address(address = market_cfg[1]['quote_token'], provider = account)
+
                 total_possible_position_base, total_possible_position_quote = await get_position(
                     market_cfg, account, asks, bids, base_token_contract, quote_token_contract
                 )
