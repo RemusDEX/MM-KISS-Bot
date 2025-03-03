@@ -12,6 +12,7 @@ SOURCE_DATA = {
     # 2: 'https://data-api.binance.vision/api/v3/aggTrades?symbol=ETHUSDC'
     # 3: 'https://data-api.binance.vision/api/v3/aggTrades?symbol=ETHUSDC'
 }
+SLEEPER_SECONDS_BETWEEN_REQUOTING = 5
 
 @dataclass
 class Config:
