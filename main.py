@@ -16,7 +16,7 @@ from starknet_py.net.models.chains import StarknetChainId
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
-from config import token_config, env_config, market_config, MAX_FEE, SOURCE_DATA
+from config import token_config, env_config, market_config, MAX_FEE, SOURCE_DATA, SLEEPER_SECONDS_BETWEEN_REQUOTING
 
 
 
@@ -39,7 +39,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_account(account_password: str) -> Account:
+def get_account() -> Account:
     """Get a market makers account."""
     client = FullNodeClient(node_url = env_config.starknet_rpc)
     account = Account(
@@ -75,7 +75,7 @@ async def claim_tokens(market_cfg, remus_contract) -> None:
             token_address = token_address,
             user_address = env_config.wallet_address
         )
-        logging.info(f'Claimable amount is {claimable} for token {token_address}.')
+        logging.info(f'Claimable amount is {claimable} for token {hex(token_address)}.')
         if claimable[0]:
             logging.info(f'Claiming')
             claim = await remus_contract.functions['claim'].invoke_v1(
@@ -95,7 +95,7 @@ async def get_position(market_cfg, account, asks, bids, base_token_contract, quo
     balance_base = await base_token_contract.functions['balance_of'].call(account=env_config.wallet_address)
     amount_remaining_base = sum(x['amount_remaining'] for x in asks)
     total_possible_position_base = balance_base[0] + amount_remaining_base
-    #
+
     balance_quote = await quote_token_contract.functions['balance_of'].call(account=env_config.wallet_address)
     amount_remaining_quote = sum(x['amount_remaining'] for x in bids)
     total_possible_position_quote = balance_quote[0] + amount_remaining_quote
@@ -224,6 +224,15 @@ async def update_quotes(account: Account, market_cfg, remus_contract, to_be_canc
     logging.info('Done with order changes')
 
 
+def pretty_print_orders(asks, bids):
+    logging.info('Pretty printed current orders.')
+    for ask in sorted(asks, key=lambda x: x['price']):
+        logging.info('\t\t%s; %s', ask['price'] / 10**18, ask['amount_remaining'] / 10**18)
+    logging.info('XXX')
+    for bid in sorted(bids, key=lambda x: x['price']):
+        logging.info('\t\t%s; %s', bid['price'] / 10**18, bid['amount_remaining'] / 10**18)
+
+
 async def async_main():
     """Main async execution function."""
     args = parse_arguments()
@@ -231,8 +240,7 @@ async def async_main():
 
     logging.info("Starting Simple Stupid Market Maker")
 
-    account = get_account(env_config.account_password)
-
+    account = get_account()
 
     # FIXME: This was half done, yet merged to master. Keeping it for now for the sake of making
     # the code run (without having enough time to fix things).
@@ -244,7 +252,7 @@ async def async_main():
     # remus_manager = RemusManager(account, env_config, remus_contract, all_remus_cfgs)
     
     while True:
-        await asyncio.sleep(1)  # Example async operation
+        await asyncio.sleep(SLEEPER_SECONDS_BETWEEN_REQUOTING)
         for market_id in [x[0] for x in all_remus_cfgs[0] if x[0] in market_config.market_maker_cfg]:
             try:
                 market_cfg, market_maker_cfg = get_market_cfg(all_remus_cfgs, market_id)
@@ -256,7 +264,7 @@ async def async_main():
                 # 2) Get prices
                 r = requests.get(SOURCE_DATA[market_id])
                 fair_price = float(sorted(r.json(), key = lambda x: x['T'])[-1]['p'])
-                logging.info(f'Fair price queried: {fair_price}.')
+                logging.info('Fair price queried: %s.', fair_price)
 
                 # 3) Get orders
                 my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
@@ -264,6 +272,7 @@ async def async_main():
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
+                pretty_print_orders(asks, bids)
 
                 # 4) Get position (balance of + open orders)
                 # TODO: the remus_manager is messed up, it has to be debugged and fixed
@@ -286,7 +295,41 @@ async def async_main():
                 logging.info("Application running successfully.")
             except Exception as e:
                 logging.error("An error occurred: %s", str(e), exc_info=True)
+                logging.error("Starting to cancel all - wait.")
+                await asyncio.sleep(5)
+                # Get all existing orders
+                logging.error("Starting to cancel all - get_all_user_orders.")
+                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
+                logging.error("Starting to cancel all - my_orders:{%s}.", my_orders)
+
+                # Cancel all existing orders
+                nonce = await account.get_nonce()
+                for i, order in enumerate(my_orders[0]):
+                    (await remus_contract.functions['delete_maker_order'].invoke_v1(
+                        maker_order_id=order['maker_order_id'],
+                        max_fee=int(MAX_FEE/10),
+                        nonce = nonce + i
+                    )).wait_for_acceptance()
+
+                # Waiting a little and checking existing orders
+                logging.error("Ending cancel all - wait before exit.")
+                await asyncio.sleep(15)
+                my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
+                logging.error("Ending cancel all - remaining my_orders:{%s}.", my_orders)
+
+                #Claiming unclaimed
+                logging.error("Ending cancel all - claiming unclaimed.")
+                for market_id in market_config.market_maker_cfg.keys():
+                    try:
+                        market_cfg, market_maker_cfg = get_market_cfg(all_remus_cfgs, market_id)
+                        await claim_tokens(market_cfg, remus_contract)
+                    except:
+                        logging.error("An error while closing session occured: %s", str(e), exc_info=True)
+
+                logging.error("Ending cancel all - FINISHED.")
+
                 # sys.exit(1)
+
 
 if __name__ == "__main__":
     asyncio.run(async_main())
