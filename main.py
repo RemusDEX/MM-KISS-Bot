@@ -185,6 +185,7 @@ async def update_delete_quotes(
     # base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
     # quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     nonce = await account.get_nonce()
+    number_of_txs_used = 0
     for i, order in enumerate(to_be_canceled):
         await (await remus_contract.functions['delete_maker_order'].invoke_v1(
             maker_order_id=order['maker_order_id'],
@@ -192,8 +193,9 @@ async def update_delete_quotes(
             nonce = nonce + i
         )).wait_for_acceptance()
         logging.info(f"Canceling: {order['maker_order_id']}")
+        number_of_txs_used += 1
 
-    return nonce + i
+    return nonce + number_of_txs_used
 
 async def update_best_quotes(
     account: Account,
@@ -203,10 +205,10 @@ async def update_best_quotes(
     to_be_created,
     base_token_contract,
     quote_token_contract,
-    nonce
+    nonce # nonce pushed here is the first UNused nonce
 ) -> int:
-    base_decimals = DECIMALS[market_cfg[1]['base_token']]  # for example ETH
-    quote_decimals = DECIMALS[market_cfg[1]['quote_token']]  # for example USDC
+    base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
+    quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     
     for i, order in enumerate(to_be_created):
         if order['order_side'] == 'ask':
@@ -314,9 +316,7 @@ async def async_main():
                 nonce = await update_delete_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract)
                 assert nonce is not None
                 assert nonce != 0
-                logging.info(f'$$$$$$$$$$$$$$$$$$$$$$$ {nonce} $$$$$$$$$$$$$$$$$$$$$$$')
                 await update_best_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract, nonce)
-                await update_
 
                 logging.info("Application running successfully.")
             except Exception as e:
