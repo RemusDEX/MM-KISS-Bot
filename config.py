@@ -6,7 +6,7 @@ from typing import Dict
 # Load environment variables
 load_dotenv()
 
-MAX_FEE = 9122241938326667
+MAX_FEE = 91222419383266
 SOURCE_DATA = {
     1: 'https://data-api.binance.vision/api/v3/aggTrades?symbol=ETHUSDC'
     # 2: 'https://data-api.binance.vision/api/v3/aggTrades?symbol=ETHUSDC'
