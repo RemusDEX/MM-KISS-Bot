@@ -29,3 +29,10 @@ docker build --tag "mm-bot" .
 ```bash
 docker run mm-bot
 ```
+
+## Other notes
+
+It might be worth to go through Mango Markets market maker example
+- https://github.com/blockworks-foundation/mango-explorer/tree/main/mango/marketmaking
+- https://github.com/blockworks-foundation/mango-explorer/blob/main/mango/simplemarketmaking/simplemarketmaker.py
+- https://github.com/blockworks-foundation/example-python-marketmaker/blob/main/marketmaker.py

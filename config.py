@@ -38,10 +38,14 @@ class MarketConfig:
     market_maker_cfg: Dict[int, Dict[str, float]] = field(
         default_factory=lambda: {
             1: {  # market_id = 1
-                'target_relative_distance_from_FP': 0.001,
-                'max_error_relative_distance_from_FP': 0.001,
+                #best orders
+                'target_relative_distance_from_FP': 0.001, # where best order is created 
+                'max_relative_distance_from_FP': 0.002, # too far from FP to be considered best (it is considered deep)
+                'min_relative_distance_from_FP': 0.0005, # too close to FP to exist -> if closer kill the order
+
                 'order_dollar_size': 10 * 10**18,  # in $
                 'minimal_remaining_quote_size': 5,  # in $
+                'max_number_of_orders_per_side': 3
             }
         }
     )
