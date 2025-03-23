@@ -53,8 +53,6 @@ def get_account() -> Account:
 
 
 def get_market_cfg(all_remus_cfgs: Any, market_id: int) -> Tuple[Any, Any]:
-    market_id = 1
-    market_cfg = all_remus_cfgs[0][0]
     market_maker_cfg = market_config.market_maker_cfg[market_id]
     assert market_maker_cfg
     market_cfg = [x for x in all_remus_cfgs[0] if x[0] == market_id][0]
@@ -111,8 +109,10 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
     If an existing quote has lower than market_maker_cfg['minimal_remaining_quote_size'] quantity, it is requoted.
     
     Optimal quote is in market_maker_cfg['target_relative_distance_from_FP'] distance from the FP, where FP is binance price.
-    The order is never perfect and market_maker_cfg['max_error_relative_distance_from_FP'] from optimal quote price level is allowed, meaning
-    that an old quote is canceled and new one created if the distance is outside of what is ok.
+    The order is never perfect and market_maker_cfg['max_distance_from_FP'] from optimal quote price level is allowed, meaning
+    that an old best quote is considered deep quote and new best is created if the distance is outside of what is ok.
+
+    If the Best quote gets too close to FP, less than market_maker_cfg['min_distance_from_FP'] distance, it is canceled.
     """
     to_be_canceled = []
     to_be_created = []
@@ -125,40 +125,66 @@ def get_optimal_quotes(asks, bids, market_maker_cfg, market_cfg, fair_price):
         to_be_created_side = []
     
         for order in side:
+            # If the remaining order size is too small requote (cancel order)
             if order['amount_remaining'] / 10**base_decimals * order['price'] / 10**base_decimals < market_maker_cfg['minimal_remaining_quote_size']:
                 logging.info(f"Canceling order because of insufficient amount. amount: {order['amount_remaining']}")
                 logging.debug(f"Canceling order because of insufficient amount. order: {order}")
                 to_be_canceled_side.append(order)
                 continue
             if (
-                (1 - market_maker_cfg['max_error_relative_distance_from_FP'] > order['price'] / 10**base_decimals / fair_price)
+                (
+                    (side_name == 'bid')
+                    and
+                    ((1 - market_maker_cfg['min_relative_distance_from_FP']) * fair_price < order['price'] / 10**base_decimals)
+                )
                 or
-                (order['price'] / 10**base_decimals / fair_price > 1 + market_maker_cfg['max_error_relative_distance_from_FP'])
+                (
+                    (side_name == 'ask')
+                    and
+                    (order['price'] / 10**base_decimals < (1 + market_maker_cfg['min_relative_distance_from_FP']) * fair_price)
+                )
             ):
-                logging.info(f"Canceling order because of incorrect price. fair_price: {fair_price}, order price: {order['price'] / 10**base_decimals}")
-                logging.debug(f"Canceling order because of incorrect price. order: {order}")
+                logging.info(f"Canceling order because too close to FP. fair_price: {fair_price}, order price: {order['price'] / 10**base_decimals}")
+                logging.debug(f"Canceling order because too close to FP. order: {order}")
                 to_be_canceled_side.append(order)
-        # If there is too many orders in the market that are not being canceled, cancel them at random. This can happen due to transactions failures.
-        if len(side) - len(to_be_canceled_side) > 1:
-            remainers = []
-            for order in side:
-                if order not in to_be_canceled_side:
-                    remainers.append(order)
-            to_be_canceled_side.extend(remainers[1:])
+        # If there is too many orders in the market that are not being canceled, cancel those with the most distant price from FP
+        # to a point that only the "allowed" number of orders is being kept.
+        if len(side) - len(to_be_canceled_side) > market_maker_cfg['max_number_of_orders_per_side']:
+            # assumes "side" (e.g. asks and bids) are ordered from the best to the deepest
+            to_be_canceled_side.extend(
+                [order for order in side if order not in to_be_canceled_side][market_maker_cfg['max_number_of_orders_per_side']:]
+            )
         to_be_canceled.extend(to_be_canceled_side)
     
-        # Create order if there is no order
-        if len(to_be_canceled_side) == len(side):
+        # Create best order if there is no best order
+        remaining = [order for order in side if order not in to_be_canceled]
+        ordered_remaining = sorted(remaining, key=lambda x: x['price'] if side_name=='ask' else -x['price'])
+        if (
+            (not ordered_remaining)
+            or
+            (
+                (side_name == 'bid')
+                and
+                (order['price'] / 10**base_decimals < (1 - market_maker_cfg['max_relative_distance_from_FP']) * fair_price)
+            )
+            or
+            (
+                (side_name == 'ask')
+                and
+                ((1 + market_maker_cfg['max_relative_distance_from_FP']) * fair_price < order['price'] / 10**base_decimals)
+            )
+        ):
+            tick_size = market_cfg[1]['tick_size']
+            base_decimals_ = 18 if market_cfg[0] == 3 else base_decimals
             if side_name == 'ask':
-                optimal_price = int(fair_price * (1 + market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals)
-                optimal_price = optimal_price // market_cfg[1]['tick_size']
-                optimal_price = optimal_price * market_cfg[1]['tick_size'] + market_cfg[1]['tick_size']
+                optimal_price = int(fair_price * (1 + market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals_)
+                optimal_price = optimal_price // tick_size
+                optimal_price = optimal_price * tick_size + tick_size
             else:
-                optimal_price = int(fair_price * (1 - market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals)
-                optimal_price = optimal_price // market_cfg[1]['tick_size']
-                optimal_price = optimal_price * market_cfg[1]['tick_size']
-    
-            optimal_amount = market_maker_cfg['order_dollar_size'] / (optimal_price / 10**base_decimals) 
+                optimal_price = int(fair_price * (1 - market_maker_cfg['target_relative_distance_from_FP']) * 10**base_decimals_)
+                optimal_price = optimal_price // tick_size
+                optimal_price = optimal_price * tick_size
+            optimal_amount = market_maker_cfg['order_dollar_size'] / (optimal_price / 10**base_decimals_)
             optimal_amount = optimal_amount // market_cfg[1]['lot_size']
             optimal_amount = optimal_amount * market_cfg[1]['lot_size']
     
@@ -182,16 +208,14 @@ async def update_delete_quotes(
     base_token_contract,
     quote_token_contract
 ) -> int:
-    # base_decimals = token_config.decimals[market_cfg[1]['base_token']]  # for example ETH
-    # quote_decimals = token_config.decimals[market_cfg[1]['quote_token']]  # for example USDC
     nonce = await account.get_nonce()
     number_of_txs_used = 0
     for i, order in enumerate(to_be_canceled):
-        await (await remus_contract.functions['delete_maker_order'].invoke_v1(
+        await remus_contract.functions['delete_maker_order'].invoke_v1(
             maker_order_id=order['maker_order_id'],
             max_fee=MAX_FEE,
             nonce = nonce + i
-        )).wait_for_acceptance()
+        )
         logging.info(f"Canceling: {order['maker_order_id']}")
         number_of_txs_used += 1
 
@@ -199,6 +223,7 @@ async def update_delete_quotes(
 
 async def update_best_quotes(
     account: Account,
+    market_id,
     market_cfg,
     remus_contract,
     to_be_canceled,
@@ -220,39 +245,49 @@ async def update_best_quotes(
             order_side = 'Bid'
             token_contract = quote_token_contract
     
-        approve_amount = order['amount'] if order_side == 'Bid' else order['amount'] * order['price'] / 10**base_decimals
-        if order_side == 'Bid':
-            approve_amount = 1000 * 10**base_decimals
-        await (await token_contract.functions['approve'].invoke_v1(
-            spender=int(env_config.remus_address, 16),
-            amount = int(approve_amount),
-            max_fee=MAX_FEE,
-            nonce = nonce + i * 2
-        )).wait_for_acceptance()
-        logging.info(f"Approving: {order['amount']}")
+        approve_amount = order['amount'] if order_side == 'Ask' else order['amount'] * order['price'] / 10**base_decimals
 
-        logging.info(f"Soon to sumbit order: q: {order['amount']}, p: {order['price']}, s: {order_side}")
-        await (await remus_contract.functions['submit_maker_order'].invoke_v1(
-            market_id=1,
-            target_token_address=target_token_address,
+        await token_contract.functions['approve'].invoke_v1(
+            spender = int(env_config.remus_address, 16),
+            amount = int(approve_amount),
+            max_fee = MAX_FEE,
+            nonce = nonce + i * 2
+        )
+        logging.info(f"Approving: {approve_amount}")
+
+        logging.info("Soon to sumbit order: q: %s, p: %s, s: %s", order['amount'], order['price'], order_side)
+        logging.debug("Soon to sumbit order: %s", dict(
+            market_id = market_id,
+            target_token_address = target_token_address,
             order_price = order['price'],
             order_size = order['amount'],
             order_side = (order_side, None),
             order_type = ('Basic', None),
             time_limit = ('GTC', None),
-            max_fee=MAX_FEE,
+            max_fee = MAX_FEE,
             nonce = nonce + i * 2 + 1
-        )).wait_for_acceptance()
+        ))
+        await remus_contract.functions['submit_maker_order'].invoke_v1(
+            market_id = market_id,
+            target_token_address = target_token_address,
+            order_price = order['price'],
+            order_size = order['amount'],
+            order_side = (order_side, None),
+            order_type = ('Basic', None),
+            time_limit = ('GTC', None),
+            max_fee = MAX_FEE,
+            nonce = nonce + i * 2 + 1
+        )
         logging.info(f"Submitting order: q: {order['amount']}, p: {order['price']}, s: {order_side}")
     logging.info('Done with order changes')
 
 
 def pretty_print_orders(asks, bids):
     logging.info('Pretty printed current orders.')
-    for ask in sorted(asks, key=lambda x: x['price']):
+    for ask in sorted(asks, key=lambda x: -x['price']):
         logging.info('\t\t%s; %s', ask['price'] / 10**18, ask['amount_remaining'] / 10**18)
     logging.info('XXX')
-    for bid in sorted(bids, key=lambda x: x['price']):
+    for bid in sorted(bids, key=lambda x: -x['price']):
         logging.info('\t\t%s; %s', bid['price'] / 10**18, bid['amount_remaining'] / 10**18)
 
 
@@ -294,6 +329,8 @@ async def async_main():
 
                 bids = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Bid']
                 asks = [x for x in my_orders[0] if x['market_id'] == market_id and x['order_side'].variant == 'Ask']
+                bids = sorted(bids, key = lambda x: -x['price'])
+                asks = sorted(asks, key = lambda x: -x['price'])
                 logging.debug(f'My remaining orders queried: {bids}, {asks}.')
                 pretty_print_orders(asks, bids)
 
@@ -316,13 +353,19 @@ async def async_main():
                 nonce = await update_delete_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract)
                 assert nonce is not None
                 assert nonce != 0
-                await update_best_quotes(account, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract, nonce)
+                await update_best_quotes(account, market_id, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract, nonce)
 
                 logging.info("Application running successfully.")
             except Exception as e:
                 logging.error("An error occurred: %s", str(e), exc_info=True)
                 logging.error("Starting to cancel all - wait.")
+
                 await asyncio.sleep(5)
+
+                # Often the main fails because of the Account not having a proper nonce. So let's re-initialize it.
+                account = get_account()
+                remus_contract = await Contract.from_address(address = env_config.remus_address, provider = account)
+
                 # Get all existing orders
                 logging.error("Starting to cancel all - get_all_user_orders.")
                 my_orders = await remus_contract.functions['get_all_user_orders'].call(user=env_config.wallet_address)
@@ -331,7 +374,7 @@ async def async_main():
                 # Cancel all existing orders
                 nonce = await account.get_nonce()
                 for i, order in enumerate(my_orders[0]):
-                    (await remus_contract.functions['delete_maker_order'].invoke_v1(
+                    await (await remus_contract.functions['delete_maker_order'].invoke_v1(
                         maker_order_id=order['maker_order_id'],
                         max_fee=int(MAX_FEE/10),
                         nonce = nonce + i
