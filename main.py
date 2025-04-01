@@ -13,6 +13,8 @@ from starknet_py.contract import Contract
 from starknet_py.net.account.account import Account
 from starknet_py.net.signer.stark_curve_signer import KeyPair
 from starknet_py.net.models.chains import StarknetChainId
+from starknet_py.net.client_errors import ClientError
+from starknet_py.transaction_errors import TransactionNotReceivedError
 # from starknet_py.utils.typed_data import EnumParameter
 # from starknet_py.net.client_models import ResourceBounds
 
@@ -356,6 +358,29 @@ async def async_main():
                 await update_best_quotes(account, market_id, market_cfg, remus_contract, to_be_canceled, to_be_created, base_token_contract, quote_token_contract, nonce)
 
                 logging.info("Application running successfully.")
+                # assert False
+            except ClientError as e:
+                # ClientError can be
+                # starknet_py.net.client_errors.ClientError: Client failed with code 63. Message: An unexpected error occurred. Data: HTTP status server error (502 Bad Gateway) for url (https://alpha-mainnet.starknet.io/gateway/add_transaction)
+                # Client failed with code 55. Message: Account validation failed. Data: Invalid transaction nonce of contract at address 0x0463de332da5b88a1676bfb4671dcbe4cc1a9147c46300a1658ed43a22d830c3. Account nonce: 0x0000000000000000000000000000000000000000000000000000000000022046; got: 0x0000000000000000000000000000000000000000000000000000000000022043
+                logging.error("A ClientError error occurred: %s", str(e), exc_info=True)
+                logging.error("Restarting in 5 seconds!")
+
+                await asyncio.sleep(5)
+
+                # Often the main fails because of the Account not having a proper nonce. So let's re-initialize it.
+                account = get_account()
+                remus_contract = await Contract.from_address(address = env_config.remus_address, provider = account)
+
+            except TransactionNotReceivedError as e:
+                # starknet_py.transaction_errors.TransactionNotReceivedError: Transaction was not received on Starknet.
+
+                logging.error("A ClientError error occurred: %s", str(e), exc_info=True)
+                logging.error("Restarting in 5 seconds!")
+
+                account = get_account()
+                remus_contract = await Contract.from_address(address = env_config.remus_address, provider = account)
+
             except Exception as e:
                 logging.error("An error occurred: %s", str(e), exc_info=True)
                 logging.error("Starting to cancel all - wait.")
